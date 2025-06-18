@@ -8,23 +8,6 @@ import { Page } from "playwright";
 import * as fs from "fs";
 import * as path from "path";
 
-const TARGET_CHECKBOXES = [
-  "pwp_criteria_0",
-  "collections_criteria_advanced_7",
-  "collections_criteria_advanced_7_child_attrs_0",
-];
-
-const FIELD_MAPPINGS = {
-  "Name/Title": "nameTitle",
-  Status: "status",
-  "Application date": "applicationDate",
-  "Revelation date": "revelationDate",
-  "Application number": "applicationNumber",
-  "Category of rights": "categoryOfRights",
-  "Registration number": "registrationNumber",
-  "Trademark type": "trademarkType",
-};
-
 interface TrademarkData {
   nameTitle?: string;
   status?: string;
@@ -50,7 +33,7 @@ class PolishPatentCrawler {
 
   constructor(private options: CrawlerOptions) {}
 
-  private validateArgs(): void {
+  private checkDateRange(): void {
     const { startDate, endDate } = this.options;
 
     const isValidDate = (dateStr: string) => {
@@ -70,15 +53,20 @@ class PolishPatentCrawler {
     }
   }
 
-  private async setCheckboxes(page: Page): Promise<void> {
+  private async configureCheckboxes(page: Page): Promise<void> {
     const checkboxes = await page.$$('input[type="checkbox"]');
+    const targetCheckboxes = [
+      "pwp_criteria_0",
+      "collections_criteria_advanced_7",
+      "collections_criteria_advanced_7_child_attrs_0",
+    ];
 
     for (const checkbox of checkboxes) {
       const id = await checkbox.getAttribute("id");
       if (!id) continue;
 
       const isChecked = await checkbox.isChecked();
-      const shouldBeChecked = TARGET_CHECKBOXES.includes(id);
+      const shouldBeChecked = targetCheckboxes.includes(id);
 
       if (isChecked !== shouldBeChecked) {
         const box = await checkbox.evaluateHandle(
@@ -95,7 +83,7 @@ class PolishPatentCrawler {
     }
   }
 
-  private async fillDateField(
+  private async inputDateValue(
     page: Page,
     selector: string,
     value: string
@@ -107,7 +95,7 @@ class PolishPatentCrawler {
     await page.waitForTimeout(300);
   }
 
-  private async performSearch(page: Page): Promise<void> {
+  private async executeSearch(page: Page): Promise<void> {
     console.log(
       `Performing search for date range: ${this.options.startDate} to ${this.options.endDate}`
     );
@@ -115,10 +103,10 @@ class PolishPatentCrawler {
     await page.waitForLoadState("networkidle");
     await page.waitForSelector(".search-attr-container", { timeout: 20000 });
 
-    await this.setCheckboxes(page);
+    await this.configureCheckboxes(page);
 
-    await this.fillDateField(page, "#attribute_date_from", this.options.endDate);
-    await this.fillDateField(page, "#attribute_date_to", this.options.startDate);
+    await this.inputDateValue(page, "#attribute_date_from", this.options.endDate);
+    await this.inputDateValue(page, "#attribute_date_to", this.options.startDate);
 
     await Promise.all([
       page.waitForNavigation({ timeout: 15000, waitUntil: "domcontentloaded" }),
@@ -149,9 +137,19 @@ class PolishPatentCrawler {
     }
   }
 
-  private async extractDetailData(page: Page): Promise<TrademarkData> {
-    return page.evaluate((fieldMappings) => {
+  private async getDetailInformation(page: Page): Promise<TrademarkData> {
+    return page.evaluate(() => {
       const result: any = {};
+      const fieldMappings = {
+        "Name/Title": "nameTitle",
+        Status: "status",
+        "Application date": "applicationDate",
+        "Revelation date": "revelationDate",
+        "Application number": "applicationNumber",
+        "Category of rights": "categoryOfRights",
+        "Registration number": "registrationNumber",
+        "Trademark type": "trademarkType",
+      };
 
       const rows = document.querySelectorAll("table.details-list tr");
 
@@ -185,11 +183,11 @@ class PolishPatentCrawler {
       });
 
       return result;
-    }, FIELD_MAPPINGS);
+    });
   }
 
   async crawl(): Promise<TrademarkData[]> {
-    this.validateArgs();
+    this.checkDateRange();
 
     console.log("Starting crawler...");
 
@@ -198,7 +196,7 @@ class PolishPatentCrawler {
     router.addDefaultHandler(async ({ page, request, enqueueLinks, log }) => {
       if (request.url.includes("/search/advanced-search") && !this.formFilled) {
         log.info("Filling out search form...");
-        await this.performSearch(page);
+        await this.executeSearch(page);
         this.formFilled = true;
       }
 
@@ -230,7 +228,7 @@ class PolishPatentCrawler {
         await page.waitForSelector("section.panel", { timeout: 15000 });
         await page.waitForTimeout(1000);
 
-        const data = await this.extractDetailData(page);
+        const data = await this.getDetailInformation(page);
 
         if (data && Object.keys(data).length) {
           this.results.push(data);
